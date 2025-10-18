@@ -30,6 +30,14 @@ def load_model(model_id: str):
             depth_pipe = pipeline(
                 task="depth-estimation", 
                 model=model_id, 
+                # Some Hugging Face model repos include custom Python code that
+                # registers TorchScript/torch.classes or custom model classes.
+                # Enabling `trust_remote_code=True` allows loading that code so
+                # those registrations are executed and the model can be instantiated.
+                # SECURITY: This executes model code from the model repo – only
+                # set this to True for trusted model sources (e.g. official HF
+                # repos or repositories you trust).
+                trust_remote_code=True,
                 device="cuda:0" if st.session_state.get('use_gpu', False) and torch.cuda.is_available() else "cpu"
             )
             
@@ -96,9 +104,26 @@ def main():
 
                 # Run inference
                 result = depth_pipeline(original_image)
-                
-                # The pipeline returns a list containing one dictionary with the depth image
-                depth_image_pil = result[0]['depth'] 
+
+                # The pipeline can return either a list of dicts or a single dict
+                # depending on transformers version / model implementation. Normalize
+                # both cases to a single dict (`output`) and then extract the
+                # depth image robustly.
+                if isinstance(result, list) and result:
+                    output = result[0]
+                elif isinstance(result, dict):
+                    output = result
+                else:
+                    raise RuntimeError(f"Unexpected model output type: {type(result)}")
+
+                # Common keys may be 'depth' or 'depth_map' depending on model.
+                depth_image_pil = None
+                for k in ("depth", "depth_map"):
+                    if k in output:
+                        depth_image_pil = output[k]
+                        break
+                if depth_image_pil is None:
+                    raise KeyError(f"Depth image not found in model output keys: {list(output.keys())}")
                 
             st.success("Inference complete!")
 
@@ -108,14 +133,14 @@ def main():
             # Display Original Image
             with col1:
                 st.subheader("Original Image")
-                st.image(original_image, use_column_width=True)
+                st.image(original_image, use_container_width=True)
             
             # Display Depth Map
             with col2:
                 st.subheader("Depth Map Output (Relative or Metric)")
                 # The PIL depth map is often grayscale. Streamlit uses a default colormap, but 
                 # we'll display the image and provide a specific visual clue.
-                st.image(depth_image_pil, use_column_width=True)
+                st.image(depth_image_pil, use_container_width=True)
                 
                 if "Relative" in model_selection:
                     st.caption("Visualization uses a color map (darker = closer, lighter = further). Output values are unitless.")

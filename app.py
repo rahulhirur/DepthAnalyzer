@@ -4,6 +4,7 @@ import io
 from PIL import Image
 from transformers import pipeline
 import torch # Moved to top to ensure availability in the cached function
+from helper.create_depth_map_plotly_figure import create_depth_map_plotly_figure
 
 # --- Configuration: Model Mappings ---
 # Maps the user-friendly name to the Hugging Face Model ID
@@ -140,7 +141,8 @@ def main():
                 st.subheader("Depth Map Output (Relative or Metric)")
                 # The PIL depth map is often grayscale. Streamlit uses a default colormap, but 
                 # we'll display the image and provide a specific visual clue.
-                st.image(depth_image_pil, use_container_width=True)
+                figure_to_display = create_depth_map_plotly_figure(output)
+                st.plotly_chart(figure_to_display, use_container_width=True)
                 
                 if "Relative" in model_selection:
                     st.caption("Visualization uses a color map (darker = closer, lighter = further). Output values are unitless.")

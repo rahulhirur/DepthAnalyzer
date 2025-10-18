@@ -1,0 +1,5 @@
+[server]
+# Increase the maximum message size Streamlit will accept (in MB).
+# Default is 200.0; set to a larger value if you must send large charts/images.
+# Be cautious: very large values may cause heavy memory and network usage.
+maxMessageSize = 500.0

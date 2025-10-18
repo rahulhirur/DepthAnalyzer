@@ -141,7 +141,7 @@ def main():
                 st.subheader("Depth Map Output (Relative or Metric)")
                 # The PIL depth map is often grayscale. Streamlit uses a default colormap, but 
                 # we'll display the image and provide a specific visual clue.
-                figure_to_display = create_depth_map_plotly_figure(output)
+                figure_to_display = create_depth_map_plotly_figure(depth_image_pil)
                 st.plotly_chart(figure_to_display, use_container_width=True)
                 
                 if "Relative" in model_selection:

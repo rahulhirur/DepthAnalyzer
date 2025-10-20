@@ -53,20 +53,65 @@ def _to_2d_float_array(depth_input: Any) -> np.ndarray:
 
     return arr.astype(float)
 
+import numpy as np
+import plotly.graph_objects as go
+from typing import Any, Tuple
+# import streamlit as st # Assuming Streamlit might be used for st.error calls
 
-def create_depth_map_plotly_figure(depth_map: Any, title: str = 'Plotly Depth Map', cmap: str = 'viridis') -> Tuple[go.Figure, dict]:
+def create_depth_map_plotly_figure(depth_map: np.ndarray, title: str = 'Plotly Depth Map', cmap: str = 'viridis') -> Tuple[go.Figure, dict]:
+    """
+    Creates a Plotly Heatmap figure from a NumPy depth map array using plotly.graph_objects.Heatmap.
+    
+    This function explicitly sets the axis ranges based on the array dimensions to ensure
+    the heatmap fills the container correctly and removes extraneous axis space.
+
+    Args:
+        depth_map (np.ndarray): The 2D NumPy array containing depth values (Z data).
+        title (str): The title for the chart.
+        cmap (str): The colormap name (e.g., 'viridis') to use for the heatmap.
+
+    Returns:
+        Tuple[go.Figure, dict]: A tuple containing the Plotly Figure and the Plotly configuration dictionary.
+    """
     
     try:
-        # numeric = _to_2d_float_array(depth_map)
-        df = pd.DataFrame(depth_map)
-        fig = px.imshow(
-            df,
-            color_continuous_scale=cmap,
-            title=title
-        )
-        fig.update_coloraxes(colorbar_title_text='Depth Value')
+        # Get the dimensions of the depth map array (Height is Y, Width is X)
+        height, width = depth_map.shape
         
-        # --- Define Plotly Configuration (Moved Here as Requested) ---
+        # Create the Heatmap trace
+        heatmap_trace = go.Heatmap(
+            z=depth_map,           # Pass the NumPy array directly as the Z data
+            colorscale=cmap,       # Use the specified colormap
+            colorbar_title='Depth Value'
+        )
+
+        fig = go.Figure(data=[heatmap_trace])
+        
+        # --- FIX: Update layout with explicit axis ranges and settings ---
+        fig.update_layout(
+            title=title,
+            # X-axis configuration
+            xaxis=dict(
+                range=[0, width], # Explicitly set range from 0 to array width
+                constrain='domain', # Prevents stretching
+                showgrid=False,
+                zeroline=False,
+            ),
+            # Y-axis configuration
+            yaxis=dict(
+                autorange='reversed',  # Keep reversed for typical image orientation (0,0 top-left)
+                scaleanchor='x',       # Ensure the aspect ratio is square/correct
+                scaleratio=1,          # Ensure 1:1 scaling
+                range=[0, height],     # Explicitly set range from 0 to array height
+                showgrid=False,
+                zeroline=False,
+            ),
+            margin=dict(l=20, r=20, t=40, b=20), # Adjust margins for better fit
+            autosize=True,
+        )
+        # -----------------------------------------------------------
+        
+        # --- Define Plotly Configuration (Kept as is) ---
         plotly_config = {
             'displayModeBar': True,
             'scrollZoom': True,       
@@ -75,21 +120,58 @@ def create_depth_map_plotly_figure(depth_map: Any, title: str = 'Plotly Depth Ma
         }
         
         return fig, plotly_config
+        
     except Exception as e:
-        st.error(f"Error creating Plotly figure: {e}")
-        st.error(f"Type of depth_map: {type(depth_map)}")
+        # Error handling block
+        try:
+            import streamlit as st
+            st.error(f"Error creating Plotly figure: {e}")
+            st.error(f"Type of depth_map: {type(depth_map)}")
+        except ImportError:
+            print(f"Error creating Plotly figure: {e}")
+            print(f"Type of depth_map: {type(depth_map)}")
+            
+        return go.Figure(), {}
 
+def colorize_depth_map_pil(depth_image_pil: Image.Image, cmap_name: str = 'magma') -> Image.Image:
+    """
+    Colorizes a raw grayscale PIL depth image using a custom NumPy colormap approximation,
+    avoiding external dependencies like Matplotlib.
 
-def convert_plotly_to_downloadable_bytes(fig: go.Figure, format: str = 'png') -> IO[bytes]:
+    Args:
+        depth_image_pil (Image.Image): The single-channel (e.g., 'L' or 'I;16') raw PIL depth image.
+        cmap_name (str): The requested colormap name (currently ignored in favor of custom logic).
+
+    Returns:
+        Image.Image: A color-mapped PIL image ready for display (RGB mode).
     """
-    Converts a Plotly Figure object into an in-memory BytesIO buffer 
-    for use with st.download_button. Requires 'kaleido'.
-    """
-    img_buffer = io.BytesIO()
     
-    # FUTURE-PROOF: Using fig.write_image() without the deprecated 'engine' argument.
-    fig.write_image(file=img_buffer, format=format)
+    # 1. Convert PIL Image to NumPy array
+    data_numpy = np.array(depth_image_pil).astype(np.float32)
     
-    img_buffer.seek(0) 
+    # 2. Normalize the data to the range [0, 1]
+    depth_min = data_numpy.min()
+    depth_max = data_numpy.max()
     
-    return img_buffer
+    if depth_max == depth_min: # Handle cases of uniform depth
+        normalized_data = np.zeros_like(data_numpy, dtype=np.float32)
+    else:
+        normalized_data = (data_numpy - depth_min) / (depth_max - depth_min)
+    
+    # 3. Apply a custom colormap approximation using pure NumPy math.
+    # This is designed to provide a high-contrast depth visualization
+    # (e.g., Blue/Purple for close depth, Yellow/White for far depth, similar to Magma/Turbo).
+    
+    # R channel: increases steadily (0.1 -> 1.0)
+    R = np.clip(1.5 * normalized_data - 0.5, 0, 1) 
+    # G channel: increases in mid-range
+    G = np.clip(1.2 * normalized_data, 0, 1)        
+    # B channel: starts high, decreases (1.0 -> 0.0)
+    B = np.clip(1.0 - 1.5 * normalized_data, 0, 1) 
+
+    # 4. Stack the channels and scale to 0-255 (uint8)
+    colored_data_rgb = np.stack([R, G, B], axis=-1)
+    colored_data_rgb = (colored_data_rgb * 255).astype(np.uint8)
+    
+    # 5. Convert the NumPy array back to a PIL Image
+    return Image.fromarray(colored_data_rgb)

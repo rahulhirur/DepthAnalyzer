@@ -4,9 +4,19 @@ import io
 from PIL import Image
 from transformers import pipeline
 import torch
-from helper.create_depth_map_plotly_figure import create_depth_map_plotly_figure, convert_plotly_to_downloadable_bytes
+from helper.create_depth_map_plotly_figure import create_depth_map_plotly_figure, colorize_depth_map_pil
+from typing import Any, Tuple
 
-st.set_page_config(layout="wide")
+# Set page config once at the top
+st.set_page_config(layout="wide", page_title="Depth-Anything V2 Estimator")
+
+def convert_depth_map_to_bytes(depth_image: Image.Image) -> bytes:
+    """Converts the PIL depth image to a byte buffer for download."""
+    buf = io.BytesIO()
+    # Save the 16-bit depth map to the buffer
+    depth_image.save(buf, format='PNG')
+    return buf.getvalue()
+
 
 # --- Configuration: Model Mappings ---
 # Maps the user-friendly name to the Hugging Face Model ID
@@ -23,41 +33,40 @@ if 'depth_pipeline' not in st.session_state:
     st.session_state['depth_pipeline'] = None
 if 'loaded_model_id' not in st.session_state:
     st.session_state['loaded_model_id'] = None
+# State variables to store results after inference
+if 'last_depth_data' not in st.session_state:
+    st.session_state['last_depth_data'] = None
+if 'last_original_image' not in st.session_state:
+    st.session_state['last_original_image'] = None
+if 'last_depth_image_pil' not in st.session_state:
+    st.session_state['last_depth_image_pil'] = None
+if 'last_model_title' not in st.session_state:
+    st.session_state['last_model_title'] = None
+# State flag to control heatmap generation
+if 'heatmap_requested' not in st.session_state:
+    st.session_state['heatmap_requested'] = False
+
 
 # --- Utility Function: Model Loading (Cached) ---
 @st.cache_resource
 def load_model(model_id: str):
-    """
-    Loads the Hugging Face depth estimation pipeline.
-    Uses st.cache_resource to load the model only once, speeding up the app.
-    Uses st.status to show the loading process.
-    """
-    # START: Using st.status for model loading progress
-    # with st.status(f"Downloading and loading model: **{model_id}**...", expanded=True) as status:
+    """Loads the Hugging Face depth estimation pipeline."""
     try:
-        # The pipeline handles model loading, preprocessing, and inference steps.
         depth_pipe = pipeline(
             task="depth-estimation", 
             model=model_id, 
             trust_remote_code=True,
             device="cuda:0" if torch.cuda.is_available() else "cpu"
         )
-        
-        # Update status on success
-        # status.update(label=f"Model {model_id.split('/')[-1]} loaded successfully!", state="complete", expanded=False)
         return depth_pipe
     except Exception as e:
-        # Update status on error
-        # status.update(label=f"Failed to load model {model_id.split('/')[-1]}", state="error", expanded=True)
         # Re-raise the exception for the main app's error handler
         raise e
-    # END: Using st.status
 
 # --- Callback function to handle model loading on button click ---
 def handle_model_load(model_id, model_selection):
     """Callback to store the loaded model in session state."""
     with st.status(f"Downloading and loading model: **{model_id}**...", expanded=True) as status:
-        
         try:
             pipeline_instance = load_model(model_id)
             st.session_state['depth_pipeline'] = pipeline_instance
@@ -70,7 +79,6 @@ def handle_model_load(model_id, model_selection):
             st.session_state['loaded_model_id'] = None
 
 def main():
-    st.set_page_config(layout="wide", page_title="Depth-Anything V2 Estimator")
     st.title("Depth-Anything V2 Estimator")
     st.markdown("### Zero-Shot & Metric Depth Estimation for Images")
 
@@ -82,14 +90,16 @@ def main():
         "Choose Model Variant:",
         options=list(MODEL_MAP.keys()),
         index=0,
-        key='model_selector' # Ensure selection persists
+        key='model_selector'
     )
     
     model_id = MODEL_MAP[model_selection]
     st.sidebar.caption(f"HF ID: `{model_id}`")
     
-    # Display status if model is loaded
-    if st.session_state['depth_pipeline'] and st.session_state['loaded_model_id'] == model_selection:
+    # Model Status and Load Button Logic
+    is_model_ready = st.session_state['depth_pipeline'] and st.session_state['loaded_model_id'] == model_selection
+    
+    if is_model_ready:
         st.sidebar.success(f"Model **{model_selection}** is ready.")
         load_label = "Model Loaded - Click to Reload"
     else:
@@ -114,8 +124,6 @@ def main():
     )
 
     # 4. Run Inference Button (Conditionally Enabled)
-    is_model_ready = st.session_state['depth_pipeline'] is not None and st.session_state['loaded_model_id'] == model_selection
-    
     run_button = st.sidebar.button(
         "Run Depth Estimation", 
         type="primary", 
@@ -129,77 +137,160 @@ def main():
     # --- Main Content Area for Inference ---
     if run_button and uploaded_file and is_model_ready:
         try:
-            # Load the original image
             original_image = Image.open(uploaded_file).convert("RGB")
             
-            # --- Run Model ---
             with st.spinner(f"Running inference with {model_selection}..."):
                 depth_pipeline = st.session_state['depth_pipeline']
 
-                # Run inference
                 result = depth_pipeline(original_image)
 
-                # Normalize output to extract depth image
                 if isinstance(result, list) and result:
-                    st.write("Model output is a list.") 
                     output = result[0]
                 elif isinstance(result, dict):
-                    st.write("Model output is a dict.")
-                    keyname = list(result.keys())
-
                     output = result
                 else:
                     raise RuntimeError(f"Unexpected model output type: {type(result)}")
 
-                # Extract depth image
                 depth_image_pil = output.get("depth") 
                 
                 if depth_image_pil is None:
                     raise KeyError(f"Depth image not found in model output keys: {list(output.keys())}")
                 
             st.success("Inference complete!")
-
-            # --- Visualization ---
-            tabs = st.tabs(["Depth map","Original Image", "Depth heat Map"])
             
-            # Display Original Image
-            with tabs[0]:
-
-                st.subheader("Depth Map Output (Plotly Chart)")
-                st.image(depth_image_pil, width="stretch")
-                # plotly_figure, plotly_config = create_depth_map_plotly_figure(depth_image_pil)
-                
-                
-                if "Relative" in model_selection:
-                    st.caption("Output values are unitless (closer/further relative order).")
-                else:
-                    st.caption("Output values are absolute metric depth (in meters).")
-    
-                
-            # Display Depth Map using Plotly for better visualization/interactivity
-            with tabs[1]:
-
-                st.subheader("Original Image")
-                st.image(original_image, width="stretch")
+            # --- Store Results in Session State ---
+            st.session_state['last_original_image'] = original_image
+            st.session_state['last_depth_image_pil'] = depth_image_pil
+            st.session_state['last_model_title'] = model_selection
             
-            with tabs[2]:
-                st.write("Generating Plotly figure...")
-                data_numpy = output.get("predicted_depth").cpu().detach().numpy()
-                plotly_figure, plotly_config = create_depth_map_plotly_figure(data_numpy)
-                st.plotly_chart(plotly_figure, config=plotly_config)
+            # Extract and store NumPy array (the Z data for Plotly)
+            data_numpy = output.get("predicted_depth").cpu().detach().numpy()
+            st.session_state['last_depth_data'] = data_numpy
+            
+            # Reset heatmap requested state for the new data
+            st.session_state['heatmap_requested'] = False 
+            
+            # Trigger a rerun to display the visualization section which is outside this block
+            st.rerun()
 
         except Exception as e:
             st.error(f"An error occurred during processing: {e}")
-            # st.warning("Please ensure all required Python libraries are installed.")
+    
+    # --- Visualization and Download Section (runs if data is available) ---
+    if st.session_state['last_depth_data'] is not None:
+        
+        # Access stored data
+        original_image = st.session_state['last_original_image']
+        depth_image_pil = st.session_state['last_depth_image_pil']
+        data_numpy = st.session_state['last_depth_data']
+        model_title = st.session_state['last_model_title']
+        
+        # --- Data Preparation for Downloads ---
+        file_name_prefix = f"depth_data_{model_title.replace(' ', '_')}"
+        
+        # 2. Prepare 16-bit PNG (Raw Data)
+        raw_png_bytes = convert_depth_map_to_bytes(depth_image_pil)
+        
+        # 3. Prepare NumPy Data (.npy)
+        npy_buffer = io.BytesIO()
+        np.save(npy_buffer, data_numpy)
+        npy_buffer.seek(0) # IMPORTANT: Reset buffer position before reading for download
 
-    elif not is_model_ready and uploaded_file is None:
-        st.info("Start by selecting a model and clicking 'Load Model', then upload an image.")
-    elif is_model_ready and uploaded_file is None:
-        st.info(f"Model **{model_selection}** is loaded. Please upload an image to run inference.")
-    elif not is_model_ready and uploaded_file:
-        st.info(f"Image uploaded. Click 'Load Model' to proceed with **{model_selection}**.")
+        # --- Download Buttons (Updated Layout) ---
+        st.markdown("---")
+        st.subheader("Download Depth Data")
+
+        # Use columns for a better layout, especially on mobile
+        col1, col2 = st.columns(2)
+        
+        
+        with col1:
+            st.download_button(
+                label="Download RAW Depth PNG (16-bit)",
+                data=raw_png_bytes,
+                file_name=f"{file_name_prefix}_raw.png",
+                mime="image/png",
+                key="download_raw_png_v2",
+                type="secondary",
+                help="The PNG file containing raw 16-bit depth values for quantitative use."
+            )
+
+        with col2:
+            st.download_button(
+                label="Download NumPy Array (.npy)",
+                data=npy_buffer,
+                file_name=f"{file_name_prefix}.npy",
+                mime="application/octet-stream",
+                key="download_npy_v2",
+                type="secondary",
+                help="Download the depth map as a raw NumPy array file."
+            )
+        
+        # --- Heatmap Trigger Button ---
+        st.markdown("---")
+        st.subheader("Visualization Tabs")
+        
+        if not st.session_state['heatmap_requested']:
+            st.button(
+                "Generate Interactive Heatmap (Plotly)",
+                key="trigger_plotly_heatmap",
+                on_click=lambda: st.session_state.update(heatmap_requested=True),
+                type="primary",
+                help="Click to generate the interactive Plotly visualization, which can be resource-intensive."
+            )
+        else:
+            st.success("Interactive Plotly Heatmap is ready to view in the tab below.")
+
+
+        # --- Visualization Tabs ---
+        tabs = st.tabs(["Depth Map (PNG)", "Original Image", "Depth Heatmap (Plotly)"])
+        
+        # Tab 1: Original Image
+        with tabs[1]:
+            st.subheader("Original Image")
+            st.image(original_image, width="stretch")
+
+        # Tab 2: Depth Map PNG
+        with tabs[0]:
+            st.subheader("Depth Map Output (PNG Visualization)")
+            st.image(colorize_depth_map_pil(depth_image_pil), width="stretch")
+            if "Relative" in model_title:
+                st.caption("Output values are unitless (closer/further relative order).")
+            else:
+                st.caption("Output values are absolute metric depth (in meters).")
+
+        # Tab 3: Depth Heatmap Plotly (Conditional Generation)
+        with tabs[2]:
+            
+            st.subheader("Interactive Depth Heatmap (Z-Values)")
+            st.write(f"Visualization button clicked-{st.session_state.get('heatmap_requested')}")
+
+            if st.session_state.get('heatmap_requested', False):
+                with st.status("Generating resource-intensive Plotly chart...", expanded=True) as status:
+                    try:
+                        plotly_figure, plotly_config = create_depth_map_plotly_figure(
+                            data_numpy, 
+                            title=f"Depth Heatmap - {model_title}",
+                        )
+                        status.update(label="Plotly Heatmap ready!", state="complete", expanded=True)
+                        st.plotly_chart(plotly_figure, config=plotly_config)
+                    except Exception as e:
+                        status.update(label="Heatmap generation failed.", state="error", expanded=True)
+                        st.error(f"Error generating Plotly figure: {e}")
+                        st.session_state['heatmap_requested'] = False
+            else:
+                st.info("Click 'Generate Interactive Heatmap (Plotly)' above to render the visualization.")
+        
+    # --- Initial Prompts/Instruction Blocks ---
+    else:
+        # Check if data is present, if not, show instructions
+        if not is_model_ready and uploaded_file is None:
+            st.info("Start by selecting a model and clicking 'Load Model', then upload an image.")
+        elif is_model_ready and uploaded_file is None:
+            st.info(f"Model **{model_selection}** is loaded. Please upload an image to run inference.")
+        elif not is_model_ready and uploaded_file:
+            st.info(f"Image uploaded. Click 'Load Model' to proceed with **{model_selection}**.")
 
 
 if __name__ == "__main__":
     main()
-

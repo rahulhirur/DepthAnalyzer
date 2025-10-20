@@ -1,25 +1,30 @@
-
-import plotly.express as px
+import streamlit as st
 import numpy as np
+import plotly.express as px
 import plotly.graph_objects as go
+import io
+from typing import IO, Any, Tuple
+
 from PIL import Image
-import torch
 
+import pandas as pd
 
-def _to_2d_float_array(depth_input) -> np.ndarray:
+# ====================================================================
+# UTILITY FUNCTIONS
+# ====================================================================
+
+def _to_2d_float_array(depth_input: Any) -> np.ndarray:
     """
     Normalize various depth input types to a 2D numpy float array.
-    Accepts: dict with keys ('depth','depth_map'), PIL Image, torch tensor,
-    numpy array, or nested lists. Non-numeric entries are coerced to NaN.
+    Accepts: dict, PIL Image, torch tensor, numpy array, or nested lists. 
+    Non-numeric entries are coerced to NaN.
     """
-    # Extract from dict if necessary
     if isinstance(depth_input, dict):
         for k in ("depth", "depth_map"):
             if k in depth_input:
                 depth_input = depth_input[k]
                 break
 
-    # Torch tensor
     if hasattr(depth_input, 'cpu') and hasattr(depth_input, 'numpy'):
         arr = depth_input.cpu().numpy()
     elif isinstance(depth_input, Image.Image):
@@ -27,11 +32,9 @@ def _to_2d_float_array(depth_input) -> np.ndarray:
     else:
         arr = np.array(depth_input)
 
-    # Attempt to coerce to float; on failure map bad entries to NaN
     try:
         arr = arr.astype(float)
     except Exception:
-        # safe vectorized conversion
         def _safe(x):
             try:
                 return float(x)
@@ -40,52 +43,53 @@ def _to_2d_float_array(depth_input) -> np.ndarray:
         vec = np.vectorize(_safe, otypes=[float])
         arr = vec(arr)
 
-    # If RGB(A), convert to luminance
     if arr.ndim == 3 and arr.shape[2] in (3, 4):
         arr = 0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]
 
-    # Ensure 2D
     if arr.ndim == 1:
-        # turn into a row
         arr = arr[np.newaxis, :]
     if arr.ndim > 2:
-        # collapse extra dimensions by taking the first channel
         arr = arr[..., 0]
 
     return arr.astype(float)
 
 
-def create_depth_map_plotly_figure(depth_map, title: str = 'Plotly Depth Map', cmap: str = 'viridis') -> go.Figure:
-    """
-    Creates and returns a Plotly figure object visualizing a depth map as a heatmap.
+def create_depth_map_plotly_figure(depth_map: Any, title: str = 'Plotly Depth Map', cmap: str = 'viridis') -> Tuple[go.Figure, dict]:
     
-    Args:
-        depth_map (np.ndarray): Depth map (2D array) to visualize.
-        title (str): Title for the plot.
-        cmap (str): Colormap to use (Plotly supports many Matplotlib names).
+    try:
+        # numeric = _to_2d_float_array(depth_map)
+        df = pd.DataFrame(depth_map)
+        fig = px.imshow(
+            df,
+            color_continuous_scale=cmap,
+            title=title
+        )
+        fig.update_coloraxes(colorbar_title_text='Depth Value')
         
-    Returns:
-        go.Figure: The Plotly figure object ready for display.
-    """
-    # Normalize input to a numeric 2D array
-    numeric = _to_2d_float_array(depth_map)
+        # --- Define Plotly Configuration (Moved Here as Requested) ---
+        plotly_config = {
+            'displayModeBar': True,
+            'scrollZoom': True,       
+            'displaylogo': False,
+            'locale': 'en'
+        }
+        
+        return fig, plotly_config
+    except Exception as e:
+        st.error(f"Error creating Plotly figure: {e}")
+        st.error(f"Type of depth_map: {type(depth_map)}")
 
-    # Use Plotly Express for a simple heatmap/image display
-    fig = px.imshow(
-        numeric,
-        color_continuous_scale=cmap,
-        title=title
-    )
+
+def convert_plotly_to_downloadable_bytes(fig: go.Figure, format: str = 'png') -> IO[bytes]:
+    """
+    Converts a Plotly Figure object into an in-memory BytesIO buffer 
+    for use with st.download_button. Requires 'kaleido'.
+    """
+    img_buffer = io.BytesIO()
     
-    # Customize layout for better readability (optional)
-    fig.update_layout(
-        xaxis_title="X-Axis", 
-        yaxis_title="Y-Axis",
-        title_x=0.5 # Center the title
-    )
+    # FUTURE-PROOF: Using fig.write_image() without the deprecated 'engine' argument.
+    fig.write_image(file=img_buffer, format=format)
     
-    # Explicitly set the colorbar label
-    fig.update_coloraxes(colorbar_title_text='Depth Value')
+    img_buffer.seek(0) 
     
-    # Return the figure object
-    return fig
+    return img_buffer

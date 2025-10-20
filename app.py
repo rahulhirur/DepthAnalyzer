@@ -3,8 +3,10 @@ import numpy as np
 import io
 from PIL import Image
 from transformers import pipeline
-import torch # Moved to top to ensure availability in the cached function
-from helper.create_depth_map_plotly_figure import create_depth_map_plotly_figure
+import torch
+from helper.create_depth_map_plotly_figure import create_depth_map_plotly_figure, convert_plotly_to_downloadable_bytes
+
+st.set_page_config(layout="wide")
 
 # --- Configuration: Model Mappings ---
 # Maps the user-friendly name to the Hugging Face Model ID
@@ -16,6 +18,12 @@ MODEL_MAP = {
     "Metric (Outdoor Large)": "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf",
 }
 
+# --- Session State Initialization ---
+if 'depth_pipeline' not in st.session_state:
+    st.session_state['depth_pipeline'] = None
+if 'loaded_model_id' not in st.session_state:
+    st.session_state['loaded_model_id'] = None
+
 # --- Utility Function: Model Loading (Cached) ---
 @st.cache_resource
 def load_model(model_id: str):
@@ -25,159 +33,173 @@ def load_model(model_id: str):
     Uses st.status to show the loading process.
     """
     # START: Using st.status for model loading progress
-    with st.status(f"Downloading and loading model: **{model_id}**...", expanded=True) as status:
-        try:
-            # The pipeline handles model loading, preprocessing, and inference steps.
-            depth_pipe = pipeline(
-                task="depth-estimation", 
-                model=model_id, 
-                # Some Hugging Face model repos include custom Python code that
-                # registers TorchScript/torch.classes or custom model classes.
-                # Enabling `trust_remote_code=True` allows loading that code so
-                # those registrations are executed and the model can be instantiated.
-                # SECURITY: This executes model code from the model repo – only
-                # set this to True for trusted model sources (e.g. official HF
-                # repos or repositories you trust).
-                trust_remote_code=True,
-                device="cuda:0" if st.session_state.get('use_gpu', False) and torch.cuda.is_available() else "cpu"
-            )
-            
-            # Update status on success
-            status.update(label=f"Model {model_id.split('/')[-1]} loaded successfully!", state="complete", expanded=False)
-            return depth_pipe
-        except Exception as e:
-            # Update status on error
-            status.update(label=f"Failed to load model {model_id.split('/')[-1]}", state="error", expanded=True)
-            # Re-raise the exception for the main app's error handler
-            raise e
+    # with st.status(f"Downloading and loading model: **{model_id}**...", expanded=True) as status:
+    try:
+        # The pipeline handles model loading, preprocessing, and inference steps.
+        depth_pipe = pipeline(
+            task="depth-estimation", 
+            model=model_id, 
+            trust_remote_code=True,
+            device="cuda:0" if torch.cuda.is_available() else "cpu"
+        )
+        
+        # Update status on success
+        # status.update(label=f"Model {model_id.split('/')[-1]} loaded successfully!", state="complete", expanded=False)
+        return depth_pipe
+    except Exception as e:
+        # Update status on error
+        # status.update(label=f"Failed to load model {model_id.split('/')[-1]}", state="error", expanded=True)
+        # Re-raise the exception for the main app's error handler
+        raise e
     # END: Using st.status
-    
 
-# --- Utility Function: Image Processing & Saving ---
-def convert_depth_map_to_bytes(depth_image: Image.Image) -> bytes:
-    """Converts the PIL depth image to a byte buffer for download."""
-    buf = io.BytesIO()
-    # Save the 16-bit depth map to the buffer
-    depth_image.save(buf, format='PNG')
-    return buf.getvalue()
+# --- Callback function to handle model loading on button click ---
+def handle_model_load(model_id, model_selection):
+    """Callback to store the loaded model in session state."""
+    with st.status(f"Downloading and loading model: **{model_id}**...", expanded=True) as status:
+        
+        try:
+            pipeline_instance = load_model(model_id)
+            st.session_state['depth_pipeline'] = pipeline_instance
+            st.session_state['loaded_model_id'] = model_selection
+            status.update(label=f"Model {model_id.split('/')[-1]} loaded successfully!", state="complete", expanded=False)
+        except Exception as e:
+            status.update(label=f"Failed to load model {model_id.split('/')[-1]}", state="error", expanded=True)
+            st.error(f"Error during model loading: {e}")
+            st.session_state['depth_pipeline'] = None
+            st.session_state['loaded_model_id'] = None
 
-# --- Streamlit App Layout ---
 def main():
     st.set_page_config(layout="wide", page_title="Depth-Anything V2 Estimator")
     st.title("Depth-Anything V2 Estimator")
     st.markdown("### Zero-Shot & Metric Depth Estimation for Images")
 
-    # --- Sidebar for Configuration ---
-    st.sidebar.header("Configuration")
+    # --- Sidebar for Configuration and Model Loading ---
+    st.sidebar.header("Model Selection")
     
-    # 1. Model Selection
+    # 1. Model Selection Dropdown
     model_selection = st.sidebar.selectbox(
         "Choose Model Variant:",
         options=list(MODEL_MAP.keys()),
-        index=2 # Default to Relative (Large)
+        index=0,
+        key='model_selector' # Ensure selection persists
     )
     
     model_id = MODEL_MAP[model_selection]
     st.sidebar.caption(f"HF ID: `{model_id}`")
     
-    # 2. File Uploader
+    # Display status if model is loaded
+    if st.session_state['depth_pipeline'] and st.session_state['loaded_model_id'] == model_selection:
+        st.sidebar.success(f"Model **{model_selection}** is ready.")
+        load_label = "Model Loaded - Click to Reload"
+    else:
+        st.sidebar.warning(f"Model **{model_selection}** is not loaded.")
+        load_label = f"Load Model"
+
+    # 2. Load Model Button
+    st.sidebar.button(
+        load_label,
+        on_click=handle_model_load,
+        args=(model_id, model_selection),
+        type="secondary",
+        width="stretch"
+    )
+    
+    st.sidebar.markdown("---")
+    
+    # 3. File Uploader
     uploaded_file = st.sidebar.file_uploader(
         "Upload an Image (.jpg, .png)", 
         type=["jpg", "jpeg", "png"]
     )
 
-    # 3. Run Button
-    run_button = st.sidebar.button("Run Depth Estimation", type="primary", use_container_width=True)
+    # 4. Run Inference Button (Conditionally Enabled)
+    is_model_ready = st.session_state['depth_pipeline'] is not None and st.session_state['loaded_model_id'] == model_selection
+    
+    run_button = st.sidebar.button(
+        "Run Depth Estimation", 
+        type="primary", 
+        use_container_width=True,
+        disabled=not is_model_ready or uploaded_file is None
+    )
 
     st.sidebar.markdown("---")
     st.sidebar.caption("The **Relative** models provide unitless depth indicating distance order. The **Metric** models are fine-tuned to output depth in meters.")
 
-    # --- Main Content Area ---
-    if run_button and uploaded_file:
+    # --- Main Content Area for Inference ---
+    if run_button and uploaded_file and is_model_ready:
         try:
             # Load the original image
             original_image = Image.open(uploaded_file).convert("RGB")
             
-            # --- Load and Run Model ---
+            # --- Run Model ---
             with st.spinner(f"Running inference with {model_selection}..."):
-                # Load the cached pipeline
-                depth_pipeline = load_model(model_id)
+                depth_pipeline = st.session_state['depth_pipeline']
 
                 # Run inference
                 result = depth_pipeline(original_image)
 
-                # The pipeline can return either a list of dicts or a single dict
-                # depending on transformers version / model implementation. Normalize
-                # both cases to a single dict (`output`) and then extract the
-                # depth image robustly.
+                # Normalize output to extract depth image
                 if isinstance(result, list) and result:
+                    st.write("Model output is a list.") 
                     output = result[0]
                 elif isinstance(result, dict):
+                    st.write("Model output is a dict.")
+                    keyname = list(result.keys())
+
                     output = result
                 else:
                     raise RuntimeError(f"Unexpected model output type: {type(result)}")
 
-                # Common keys may be 'depth' or 'depth_map' depending on model.
-                depth_image_pil = None
-                for k in ("depth", "depth_map"):
-                    if k in output:
-                        depth_image_pil = output[k]
-                        break
+                # Extract depth image
+                depth_image_pil = output.get("depth") 
+                
                 if depth_image_pil is None:
                     raise KeyError(f"Depth image not found in model output keys: {list(output.keys())}")
                 
             st.success("Inference complete!")
 
             # --- Visualization ---
-            col1, col2 = st.columns(2)
+            tabs = st.tabs(["Depth map","Original Image", "Depth heat Map"])
             
             # Display Original Image
-            with col1:
-                st.subheader("Original Image")
-                st.image(original_image, use_container_width=True)
-            
-            # Display Depth Map
-            with col2:
-                st.subheader("Depth Map Output (Relative or Metric)")
-                # The PIL depth map is often grayscale. Streamlit uses a default colormap, but 
-                # we'll display the image and provide a specific visual clue.
-                figure_to_display = create_depth_map_plotly_figure(depth_image_pil)
-                st.plotly_chart(figure_to_display, use_container_width=True)
+            with tabs[0]:
+
+                st.subheader("Depth Map Output (Plotly Chart)")
+                st.image(depth_image_pil, width="stretch")
+                # plotly_figure, plotly_config = create_depth_map_plotly_figure(depth_image_pil)
+                
                 
                 if "Relative" in model_selection:
-                    st.caption("Visualization uses a color map (darker = closer, lighter = further). Output values are unitless.")
+                    st.caption("Output values are unitless (closer/further relative order).")
                 else:
-                    st.caption("Visualization uses a color map. Output values are absolute metric depth (in meters).")
+                    st.caption("Output values are absolute metric depth (in meters).")
+    
+                
+            # Display Depth Map using Plotly for better visualization/interactivity
+            with tabs[1]:
 
-
-            # --- Save Depth Map (.png) ---
-            st.markdown("---")
-            st.subheader("Download Depth Map")
-
-            # Convert the depth image (which is 16-bit PIL image) to bytes
-            depth_bytes = convert_depth_map_to_bytes(depth_image_pil)
+                st.subheader("Original Image")
+                st.image(original_image, width="stretch")
             
-            # Use the input filename with a new suffix
-            file_name = uploaded_file.name.split('.')[0]
-            download_filename = f"{file_name}_{model_selection.replace(' ', '_')}.png"
-
-            st.download_button(
-                label="Download Depth Map (16-bit PNG)",
-                data=depth_bytes,
-                file_name=download_filename,
-                mime="image/png",
-                key="download_button",
-                type="secondary",
-                help="The downloaded PNG file contains raw 16-bit depth values for quantitative analysis."
-            )
+            with tabs[2]:
+                st.write("Generating Plotly figure...")
+                data_numpy = output.get("predicted_depth").cpu().detach().numpy()
+                plotly_figure, plotly_config = create_depth_map_plotly_figure(data_numpy)
+                st.plotly_chart(plotly_figure, config=plotly_config)
 
         except Exception as e:
             st.error(f"An error occurred during processing: {e}")
-            st.warning("Ensure all required Python libraries (`streamlit`, `transformers`, `torch`, `Pillow`) are installed.")
+            # st.warning("Please ensure all required Python libraries are installed.")
 
-    elif not uploaded_file and not run_button:
-        st.info("Upload an image in the sidebar and click 'Run Depth Estimation' to start.")
+    elif not is_model_ready and uploaded_file is None:
+        st.info("Start by selecting a model and clicking 'Load Model', then upload an image.")
+    elif is_model_ready and uploaded_file is None:
+        st.info(f"Model **{model_selection}** is loaded. Please upload an image to run inference.")
+    elif not is_model_ready and uploaded_file:
+        st.info(f"Image uploaded. Click 'Load Model' to proceed with **{model_selection}**.")
+
 
 if __name__ == "__main__":
-    # The torch import has been moved to the top of the file.
     main()
+

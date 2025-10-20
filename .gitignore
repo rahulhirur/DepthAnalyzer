@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# venv
+torch_env/**
+
+
+#custom
+appTest*.py
+helper/functions.py

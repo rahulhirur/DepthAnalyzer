@@ -26,6 +26,11 @@ MODEL_MAP = {
     "Relative (Large - 335M)": "depth-anything/Depth-Anything-V2-Large-hf",
     "Metric (Indoor Large)": "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf",
     "Metric (Outdoor Large)": "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf",
+    "Camera Depth Model d405": "depth-anything/camera-depth-model-d405",
+    "Camera Depth Model d435": "depth-anything/camera-depth-model-d435",
+    "Camera Depth Model Base": "depth-anything/camera-depth-model-base",
+    
+
 }
 
 # --- Session State Initialization ---

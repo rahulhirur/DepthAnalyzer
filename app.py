@@ -313,20 +313,20 @@ def main():
                 depth_image_pil, data_numpy = run_model_get_depth(original_image)
                 
 
-                # --- Store Results in Session State ---
-                st.session_state['last_original_image'] = original_image
-                st.session_state['last_depth_image_pil'] = depth_image_pil
-                st.session_state['last_model_title'] = model_selection
-                
-                # Extract and store NumPy array (the Z data for Plotly)
-                
-                st.session_state['last_depth_data'] = data_numpy
-                
-                # Reset heatmap requested state for the new data
-                st.session_state['heatmap_requested'] = False 
-                
-                # Trigger a rerun to display the visualization section which is outside this block
-                st.rerun()
+            # --- Store Results in Session State ---
+            st.session_state['last_original_image'] = original_image
+            st.session_state['last_depth_image_pil'] = depth_image_pil
+            st.session_state['last_model_title'] = model_selection
+            
+            # Extract and store NumPy array (the Z data for Plotly)
+            
+            st.session_state['last_depth_data'] = data_numpy
+            
+            # Reset heatmap requested state for the new data
+            st.session_state['heatmap_requested'] = False 
+            
+            # Trigger a rerun to display the visualization section which is outside this block
+            st.rerun()
 
         except Exception as e:
             st.error(f"An error occurred during processing: {e}")

@@ -95,6 +95,7 @@ def run_model_get_depth(original_image, lidar_depth_image=None):
 
         with torch.no_grad():
             outputs = depth_pipeline(**inputs)
+
         post_processed_output = img_processor.post_process_depth_estimation(
             outputs,
             target_sizes=[(original_image.height, original_image.width)],
@@ -104,11 +105,14 @@ def run_model_get_depth(original_image, lidar_depth_image=None):
 
         if predicted_depth is None:
             raise KeyError(f"Predicted depth not found in model output keys, check prompt and depth image compatibility.")
+            return None, None
             
         else:
-            return tensor_to_pil_np(predicted_depth)
+            return tensor_to_pil_np(predicted_depth), predicted_depth.squeeze().cpu().numpy()
 
     else:
+
+
         depth_pipeline = st.session_state['depth_pipeline']
 
         result = depth_pipeline(original_image)
@@ -132,7 +136,45 @@ def run_model_get_depth(original_image, lidar_depth_image=None):
             data_numpy = output.get("predicted_depth").cpu().detach().numpy()
             return depth_image_pil, data_numpy
     
+
+def min_max_scale_and_get_variance(data_2d: np.ndarray) -> tuple[np.ndarray, float]:
+    """
+    Scales a 2D NumPy array using Min-Max normalization (range [0, 1]) 
+    and returns the scaled array along with its variance.
+
+    Args:
+        data_2d: A 2D NumPy array containing numerical data.
+
+    Returns:
+        A tuple containing:
+        1. normalized_data (np.ndarray): The 2D array scaled between 0 and 1.
+        2. normalized_variance (float): The variance of the scaled data.
     
+    Raises:
+        ValueError: If the input array is not 2D.
+    """
+    
+    if data_2d.ndim != 2:
+        raise ValueError("Input array must be 2-dimensional.")
+    
+    # 1. Calculate the overall min and max for scaling
+    data_min = np.min(data_2d)
+    data_max = np.max(data_2d)
+    data_range = data_max - data_min
+    
+    # 2. Handle the edge case where all values are the same
+    if data_range == 0:
+        # If max equals min, the array cannot be scaled. Return zeros or 
+        # a neutral value (like 0.5) and zero variance.
+        return np.zeros_like(data_2d), 0.0
+
+    # 3. Apply Min-Max Normalization: X_scaled = (X - Min) / (Max - Min)
+    normalized_data = (data_2d - data_min) / data_range
+    
+    # 4. Calculate the variance of the resulting scaled data
+    normalized_variance = np.var(normalized_data)
+    
+    return normalized_variance    
 
 
 # --- Utility Function: Model Loading (Cached) ---
@@ -249,7 +291,9 @@ def main():
         key='model_selector'
     )
     
+    
     model_id = MODEL_MAP[model_selection]
+    
     st.sidebar.caption(f"HF ID: `{model_id}`")
     
     # Model Status and Load Button Logic

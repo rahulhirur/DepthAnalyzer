@@ -8,6 +8,8 @@ from helper.create_depth_map_plotly_figure import create_depth_map_plotly_figure
 from typing import Any, Tuple
 from transformers import PromptDepthAnythingForDepthEstimation, PromptDepthAnythingImageProcessor
 
+from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+
 # Set page config once at the top
 st.set_page_config(layout="wide", page_title="Depth-Anything V2 Estimator")
 
@@ -184,8 +186,8 @@ def load_model(model_id: str):
     if "prompt" in model_id.lower():
 
         try:
-            image_processor = PromptDepthAnythingImageProcessor.from_pretrained(model_id)
-            model = PromptDepthAnythingForDepthEstimation.from_pretrained(model_id)
+            image_processor = AutoImageProcessor.from_pretrained(model_id)
+            model = AutoModelForDepthEstimation.from_pretrained(model_id)
 
             return model, image_processor
         except Exception as e:
@@ -291,7 +293,7 @@ def main():
         key='model_selector'
     )
     
-    
+
     model_id = MODEL_MAP[model_selection]
     
     st.sidebar.caption(f"HF ID: `{model_id}`")

@@ -365,6 +365,8 @@ def main():
                 depth_image_pil, data_numpy = run_model_get_depth(original_image)
                 
 
+            st.info(f"The variance of the estimated depth map is: {min_max_scale_and_get_variance(data_numpy):.6f}")
+
             # --- Store Results in Session State ---
             st.session_state['last_original_image'] = original_image
             st.session_state['last_depth_image_pil'] = depth_image_pil

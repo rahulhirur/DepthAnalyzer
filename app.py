@@ -10,6 +10,9 @@ from transformers import PromptDepthAnythingForDepthEstimation, PromptDepthAnyth
 
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 
+#plotly go import
+import plotly.graph_objects as go
+
 # Set page config once at the top
 st.set_page_config(layout="wide", page_title="Depth-Anything V2 Estimator")
 
@@ -88,28 +91,33 @@ def tensor_to_pil_np(tensor_depth):
 
 
 
+
 def run_model_get_depth(original_image, lidar_depth_image=None):
 
     if lidar_depth_image is not None:
+        st.write('1')
         img_processor = st.session_state['img_processor_pipeline']
+        st.write('2')
         depth_pipeline = st.session_state['depth_pipeline']
-
+        st.write('3')
+        
         inputs = img_processor(
             images=original_image,
             depth_images=lidar_depth_image,
             return_tensors="pt"
         )
-
+        st.write('4')
         with torch.no_grad():
             outputs = depth_pipeline(**inputs)
+        st.write('5')
 
         post_processed_output = img_processor.post_process_depth_estimation(
             outputs,
             target_sizes=[(original_image.height, original_image.width)],
         )
-        
+        st.write('6')
         predicted_depth = post_processed_output[0]["predicted_depth"]
-
+        st.write('7')
         if predicted_depth is None:
             raise KeyError(f"Predicted depth not found in model output keys, check prompt and depth image compatibility.")
             return None, None
@@ -184,6 +192,120 @@ def min_max_scale_and_get_variance(data_2d: np.ndarray) -> tuple[np.ndarray, flo
     return normalized_variance    
 
 
+
+def plot_scatter3d(x=None, y=None,z=None, selected_colorscale = 'viridis'):
+     
+    try:
+        if x is None or y is None or z is None:
+            raise ValueError("X, Y, and Z coordinates must be provided.")
+            return None
+        else:
+                
+
+            # Color by Z-coordinate (height) if no explicit colors
+            marker_config = dict(size=2, color=z, colorscale= selected_colorscale, colorbar=dict(title='Z'))
+
+            fig = go.Figure(data=[go.Scatter3d(x=x, y=y, z=z,
+                                                mode='markers',
+                                                marker=marker_config)])
+
+            fig.update_layout(
+                scene=dict(
+                    xaxis_title='X',
+                    yaxis_title='Y',
+                    zaxis_title='Z',
+                    aspectmode='data',
+                    xaxis=dict(
+                        visible=True, # Ensure X-axis is visible
+                        showbackground=True,
+                        backgroundcolor="rgba(0, 0, 0, 0.05)", # Light background for the grid
+                        gridcolor="lightgrey", # Color of grid lines
+                        linecolor="black", # Color of the axis line
+                        zerolinecolor="black" # Color of the zero line
+                    ),
+                    yaxis=dict(
+                        visible=True, # Ensure Y-axis is visible
+                        showbackground=True,
+                        backgroundcolor="rgba(0, 0, 0, 0.05)",
+                        gridcolor="lightgrey",
+                        linecolor="black",
+                        zerolinecolor="black"
+                    ),
+                    zaxis=dict(
+                        visible=True, # Ensure Z-axis is visible
+                        showbackground=True,
+                        backgroundcolor="rgba(0, 0, 0, 0.05)",
+                        gridcolor="lightgrey",
+                        linecolor="black",
+                        zerolinecolor="black"
+                    )
+                
+                ),
+                autosize=False,
+                width=1200,  # Adjust overall width
+                height=800,   # Adjust overall height
+                margin=dict(l=40, r=40, b=40, t=40)  # Adjust margins
+            )
+            return fig
+    
+    except Exception as e:
+        st.error(f"Error creating point cloud figure: {e}")
+        return None
+
+def visualize_pcd_from_depth(depth_data: np.ndarray, metric: bool = False, threshold: float = 3.5, selected_colorscale: str = None):
+
+    """
+    Create and display a 3D point cloud from a 2D depth map.
+
+    Args:
+        depth_data: 2D numpy array of depth (Z) values.
+        metric: If True, apply metric-based thresholding (assumes depth in meters).
+        threshold: Threshold (in same units as depth_data) used to zero out far values when metric=True.
+        selected_colorscale: Plotly colorscale name.
+    """
+
+    # downsample for faster visualization if too large
+    max_points = 200000  # Maximum number of points to visualize
+    st.write(f"Original depth data size: {depth_data.size} points.")
+    if depth_data.size > max_points:
+        factor = int(np.ceil(np.sqrt(depth_data.size / max_points)))
+        depth_data = depth_data[::factor, ::factor]
+        st.info(f"Depth data downsampled by a factor of {factor} for visualization.")
+
+    h, w = depth_data.shape
+    xx, yy = np.meshgrid(np.arange(w), np.arange(h))
+    x = xx.flatten()
+    y = yy.flatten()
+
+    z = depth_data.flatten().astype(float)
+
+    # If metric scaling is requested, use the provided threshold to remove far/invalid depths
+    if metric:
+        # Metric mode: zero out values beyond the threshold (commonly invalid/noisy lidar measurements)
+        z = np.where(z > threshold, 0.0, z)
+    else:
+        # Non-metric mode: reverse threshold logic — zero out values below the threshold
+        # This helps remove very-close/noise pixels when working with relative (unitless) outputs
+        z = np.where(z < threshold, 0.0, z)
+
+    # Scale for visibility in both modes
+    z = z * 100.0
+
+    # Additional clamp to avoid extreme outliers dominating the visualization
+    z = np.where(z > 500.0, 500.0, z)
+
+    if selected_colorscale is None:
+        selected_colorscale = 'viridis'
+
+    if x is not None:
+        fig = plot_scatter3d(x, y, z, selected_colorscale)
+
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.error("Failed to create figure from point cloud data.")
+
+
 # --- Utility Function: Model Loading (Cached) ---
 @st.cache_resource
 def load_model(model_id: str):
@@ -197,6 +319,7 @@ def load_model(model_id: str):
             return model, image_processor
         except Exception as e:
             # Re-raise the exception for the main app's error handler
+            st.write('Something went wrong')
             raise e
     else:
 
@@ -282,7 +405,6 @@ def load_inputs(image_source, depth_source):
     return original_image, lidar_depth_image
 
 
-
 def main():
     st.title("Depth-Anything V2 Estimator")
     st.markdown("### Zero-Shot & Metric Depth Estimation for Images")
@@ -307,9 +429,11 @@ def main():
     is_model_ready = st.session_state['depth_pipeline'] and st.session_state['loaded_model_id'] == model_selection
     
     if is_model_ready:
+
         st.sidebar.success(f"Model **{model_selection}** is ready.")
         load_label = "Model Loaded - Click to Reload"
     else:
+
         st.sidebar.warning(f"Model **{model_selection}** is not loaded.")
         load_label = f"Load Model"
 
@@ -346,6 +470,23 @@ def main():
         disabled=not is_model_ready or uploaded_file is None
     )
 
+
+    # 5. Clear Output Button
+    if st.sidebar.button(
+        "Clear All Output",
+        type="secondary",
+        use_container_width=True,
+        disabled=st.session_state['last_depth_data'] is None
+    ):
+        # Clear all result-related session state
+        st.session_state['last_depth_data'] = None
+        st.session_state['last_original_image'] = None
+        st.session_state['last_depth_image_pil'] = None
+        st.session_state['last_model_title'] = None
+        st.session_state['heatmap_requested'] = False
+        st.session_state["run_estimation_btn_clicked"] = False
+        st.rerun()
+    
     st.sidebar.markdown("---")
     st.sidebar.caption("The **Relative** models provide unitless depth indicating distance order. The **Metric** models are fine-tuned to output depth in meters.")
 
@@ -356,26 +497,22 @@ def main():
             if "prompt" in model_id.lower():
                 
                 original_image, lidar_depth_image = load_inputs(uploaded_file, uploaded_lidar_file)
-
+                st.write('Prompt Data Loaded')
                 depth_image_pil, data_numpy = run_model_get_depth(original_image, lidar_depth_image)
+                st.write('Prompt model done')
             else:
 
                 original_image = Image.open(uploaded_file).convert("RGB")
                 
                 depth_image_pil, data_numpy = run_model_get_depth(original_image)
-                
-
-            st.info(f"The variance of the estimated depth map is: {min_max_scale_and_get_variance(data_numpy):.6f}")
+            
 
             # --- Store Results in Session State ---
             st.session_state['last_original_image'] = original_image
             st.session_state['last_depth_image_pil'] = depth_image_pil
             st.session_state['last_model_title'] = model_selection
-            
             # Extract and store NumPy array (the Z data for Plotly)
-            
             st.session_state['last_depth_data'] = data_numpy
-            
             # Reset heatmap requested state for the new data
             st.session_state['heatmap_requested'] = False 
             
@@ -396,6 +533,8 @@ def main():
             depth_image_pil = st.session_state['last_depth_image_pil']
             data_numpy = st.session_state['last_depth_data']
             model_title = st.session_state['last_model_title']
+
+            st.info(f"The variance of the estimated depth map is: {min_max_scale_and_get_variance(data_numpy):.6f}")
             
             # --- Data Preparation for Downloads ---
             file_name_prefix = f"depth_data_{model_title.replace(' ', '_')}"
@@ -455,15 +594,18 @@ def main():
 
 
             # --- Visualization Tabs ---
-            tabs = st.tabs(["Depth Map (PNG)", "Original Image", "Depth Heatmap (Plotly)"])
+            tabs = st.tabs(['Analytics Point Cloud', "Depth Map (PNG)", "Original Image", "Depth Heatmap (Plotly)"])
+        # Tab 1: Original Image
             
-            # Tab 1: Original Image
-            with tabs[1]:
+            
+            
+            
+            with tabs[2]:
                 st.subheader("Original Image")
                 st.image(original_image, width="stretch")
 
             # Tab 2: Depth Map PNG
-            with tabs[0]:
+            with tabs[1]:
                 st.subheader("Depth Map Output (PNG Visualization)")
                 st.image(colorize_depth_map_pil(depth_image_pil), width="stretch")
                 if "Relative" in model_title:
@@ -472,7 +614,7 @@ def main():
                     st.caption("Output values are absolute metric depth (in meters).")
 
             # Tab 3: Depth Heatmap Plotly (Conditional Generation)
-            with tabs[2]:
+            with tabs[3]:
                 
                 st.subheader("Interactive Depth Heatmap (Z-Values)")
                 st.write(f"Visualization button clicked-{st.session_state.get('heatmap_requested')}")
@@ -492,11 +634,81 @@ def main():
                             st.session_state['heatmap_requested'] = False
                 else:
                     st.info("Click 'Generate Interactive Heatmap (Plotly)' above to render the visualization.")
+                
+            # Tab 4: Point Cloud Visualization
+            with tabs[0]:
+                st.subheader("3D Point Cloud Visualization")
+
+                st.write('Point cloud')
+                # Controls for point cloud visualization
+                # Default metric mode inferred from the model title when available
+                metric_default = False
+                try:
+                    if model_title and "Metric" in model_title:
+                        metric_default = True
+                except Exception:
+                    metric_default = False
+
+                metric_toggle = st.checkbox(
+                    "Treat depth as metric",
+                    value=metric_default,
+                    help="If checked, values beyond the threshold will be removed before visualization.",
+                )
+
+                # Compute a robust median (ignore non-finite and zero values where appropriate) to suggest a default threshold
+                try:
+                    flat = np.asarray(data_numpy).flatten()
+                    finite_mask = np.isfinite(flat)
+                    pos_mask = flat > 0
+                    combined_mask = finite_mask & pos_mask
+                    if combined_mask.any():
+                        median_val = float(np.median(flat[combined_mask]))
+                    else:
+                        # Fall back to median of finite values (could be zeros if all zeros)
+                        finite_only = flat[finite_mask]
+                        median_val = float(np.median(finite_only)) if finite_only.size > 0 else 0.0
+                except Exception:
+                    median_val = 0.0
+
+                st.write(f"Median depth (robust, non-zero): {median_val:.4f}")
+
+                # Suggest a default threshold relative to the median (user can override)
+                suggested_default = float(np.clip(median_val * 1.5 if median_val > 0 else 3.5, 0.0, 50.0))
+                st.write(f"Suggested default threshold: {suggested_default:.4f}")
+
+                if median_val <= 10.0:
+                    suggested_step = 0.1
+                elif median_val <= 50.0:
+                    suggested_step = 0.5
+                else:
+                    suggested_step = 1.0
+
+
+                threshold = st.slider(
+                    "Depth threshold (units same as model output; meters if metric)",
+                    min_value=0.0,
+                    max_value=suggested_default*2,
+                    value=suggested_default,
+                    step=suggested_step,
+                    help=(
+                        "Threshold behaviour depends on the 'metric' toggle: "
+                        "If metric=True, values ABOVE this threshold are removed. "
+                        "If metric=False, values BELOW this threshold are removed (useful for relative maps)."
+                    ),
+                )
+                if st.button(
+                    "Generate 3D Point Cloud",
+                    key="generate_point_cloud",
+                    type="primary",
+                    help="Click to generate and visualize the 3D point cloud from the depth map."
+                ):
+                    
+                    visualize_pcd_from_depth(data_numpy, metric=metric_toggle, threshold=threshold)
             
-        # --- Initial Prompts/Instruction Blocks ---
-            st.session_state["run_estimation_btn_clicked"] = False  # Reset the flag\
+      
+            # st.session_state["run_estimation_btn_clicked"] = False  # Reset the flag\
         else:
-            st.session_state["run_estimation_btn_clicked"] = False
+            # st.session_state["run_estimation_btn_clicked"] = False
 
             # Check if data is present, if not, show instructions
             if not is_model_ready and uploaded_file is None:

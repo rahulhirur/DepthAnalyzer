@@ -213,3 +213,6 @@ torch_env/**
 #custom
 appTest*.py
 helper/functions.py
+
+o3d_env
+tempOutput

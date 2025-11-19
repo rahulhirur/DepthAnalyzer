@@ -254,7 +254,6 @@ def save_point_cloud_to_ply(points, filename):
         for p in points:
             f.write(f"{p[0]} {p[1]} {p[2]}\n")
 
-
 # plyFile = "/home/hirur/MasterThesis/3d_Reconstruction/output/batch_1/ModelOutput/depthanything_v2/depth_point_cloud.ply"
 
 def depth_to_ply_file(depth_file, scaled_parameters_file, output_dir,tag):
